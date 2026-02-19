@@ -58,6 +58,7 @@ async function getOrCreateUser(phone) {
 }
 
 async function extractWithGemini(mediaUrl) {
+  console.log("[1] Fetching image from Twilio:", mediaUrl?.substring(0, 80));
   const imageResponse = await fetch(mediaUrl, {
     headers: {
       Authorization: "Basic " + Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString("base64"),
@@ -65,13 +66,15 @@ async function extractWithGemini(mediaUrl) {
   });
 
   if (!imageResponse.ok) {
-    throw new Error(`Image fetch failed: ${imageResponse.status}`);
+    throw new Error(`Image fetch failed: ${imageResponse.status} ${imageResponse.statusText}`);
   }
 
   const imageBuffer = await imageResponse.arrayBuffer();
   const base64 = Buffer.from(imageBuffer).toString("base64");
   const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+  console.log("[2] Image fetched OK -", Math.round(base64.length / 1024), "KB, type:", contentType);
 
+  console.log("[3] Calling Gemini API...");
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
     {
@@ -89,11 +92,26 @@ async function extractWithGemini(mediaUrl) {
     }
   );
 
+  console.log("[4] Gemini response status:", resp.status);
   const data = await resp.json();
-  if (data.error) throw new Error(data.error.message);
+
+  if (data.error) {
+    console.error("[4] Gemini API error:", JSON.stringify(data.error));
+    throw new Error(`Gemini: ${data.error.message}`);
+  }
 
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
+  console.log("[5] Gemini text length:", text.length, "- first 200 chars:", text.substring(0, 200));
+
+  if (!text) {
+    console.error("[5] Empty response. Full data:", JSON.stringify(data).substring(0, 500));
+    throw new Error("Gemini returned empty response");
+  }
+
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  const parsed = JSON.parse(cleaned);
+  console.log("[6] Parsed OK -", parsed.transactions?.length || 0, "transactions");
+  return parsed;
 }
 
 async function storeTransactions(userId, parsed) {
@@ -268,13 +286,14 @@ export default async function handler(req, res) {
     return res.status(200).send("<Response></Response>");
 
   } catch (err) {
-    console.error("Webhook error:", err);
+    console.error("Webhook error:", err.message);
+    console.error("Stack:", err.stack);
 
     try {
       await twilioClient.messages.create({
         from: process.env.TWILIO_WHATSAPP_NUMBER,
         to: req.body.From,
-        body: "❌ Sorry, something went wrong processing your image. Please try again with a clearer photo.",
+        body: `❌ Error: ${err.message?.substring(0, 200)}`,
       });
     } catch (e) {
       console.error("Failed to send error message:", e.message);
