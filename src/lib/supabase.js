@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
-// These are public (anon) keys — safe to expose in frontend
+// These are public (publishable) keys — safe to expose in frontend
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 export const supabase = createClient(supabaseUrl, supabaseKey);

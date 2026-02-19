@@ -42,10 +42,10 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 -- Indexes for fast queries
-CREATE INDEX idx_transactions_user ON transactions(user_id);
-CREATE INDEX idx_transactions_date ON transactions(user_id, parsed_date);
-CREATE INDEX idx_transactions_category ON transactions(user_id, category);
-CREATE INDEX idx_pages_user ON pages(user_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(user_id, parsed_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(user_id, category);
+CREATE INDEX IF NOT EXISTS idx_pages_user ON pages(user_id);
 
 -- Row Level Security (RLS)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
@@ -53,7 +53,7 @@ ALTER TABLE pages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 
 -- Policy: service role can do everything (for the WhatsApp bot backend)
--- The anon key is used by the web dashboard with phone-based auth
+-- The publishable key is used by the web dashboard with phone-based auth
 CREATE POLICY "Service role full access" ON users FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON pages FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON transactions FOR ALL USING (true) WITH CHECK (true);

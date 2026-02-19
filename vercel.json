@@ -6,5 +6,10 @@
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/webhook/(.*)", "destination": "/api/webhook/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "functions": {
+    "api/webhook/*.js": {
+      "maxDuration": 60
+    }
+  }
 }
