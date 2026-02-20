@@ -59,6 +59,61 @@ CREATE POLICY "Service role full access" ON pages FOR ALL USING (true) WITH CHEC
 CREATE POLICY "Service role full access" ON transactions FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================================
+-- Conversation messages (for query context)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  message_type TEXT DEFAULT 'text',        -- 'text', 'image', 'query_result'
+  metadata JSONB DEFAULT '{}',             -- store generated SQL, result count, etc.
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_user ON conversation_messages(user_id, created_at DESC);
+
+ALTER TABLE conversation_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Service role full access" ON conversation_messages FOR ALL USING (true) WITH CHECK (true);
+
+-- ============================================================
+-- Function: Secure read-only SQL executor for conversational queries
+-- ============================================================
+CREATE OR REPLACE FUNCTION run_user_query(query_text TEXT, p_user_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  result JSONB;
+BEGIN
+  -- Only allow SELECT statements
+  IF NOT (UPPER(TRIM(query_text)) LIKE 'SELECT%') THEN
+    RAISE EXCEPTION 'Only SELECT queries allowed';
+  END IF;
+
+  -- Execute the query with user_id as $1 parameter
+  EXECUTE format(
+    'SELECT COALESCE(jsonb_agg(row_to_json(t)), ''[]''::jsonb) FROM (%s) t',
+    query_text
+  )
+  USING p_user_id
+  INTO result;
+
+  RETURN result;
+END;
+$$;
+
+-- ============================================================
+-- Categories reference (for documentation)
+-- Revenue / Sales, Inventory / Stock, Salaries / Wages,
+-- Shop Expenses, Transport / Fuel, Food / Meals, Utilities,
+-- Office Supplies, Marketing / Ads, Repairs / Maintenance,
+-- Owner Drawings, Insurance, Taxes / Fees, Loan / Interest,
+-- Miscellaneous
+-- ============================================================
+
+-- ============================================================
 -- VIEW: Monthly summary per user
 -- ============================================================
 CREATE OR REPLACE VIEW monthly_summary AS

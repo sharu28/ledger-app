@@ -3,15 +3,25 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line,
 } from "recharts";
+import ChatBar from "./ChatBar";
 
 const CAT_COLORS = {
-  "Revenue / Sales": "#22c98a", "Rent / Lease": "#7c6cf0",
-  "Salaries / Wages": "#a07cf5", Utilities: "#f0a830",
-  "Office Supplies": "#20b8d0", "Transport / Fuel": "#f08040",
-  "Food / Meals": "#e860a0", "Inventory / Stock": "#20c0a8",
-  "Marketing / Ads": "#b060f0", "Repairs / Maintenance": "#708090",
-  Insurance: "#30a0e0", "Taxes / Fees": "#f0555a",
-  "Loan / Interest": "#d03040", Miscellaneous: "#8a8070",
+  "Revenue / Sales": "#22c98a",
+  "Inventory / Stock": "#20c0a8",
+  "Salaries / Wages": "#a07cf5",
+  "Shop Expenses": "#7c6cf0",
+  "Transport / Fuel": "#f08040",
+  "Food / Meals": "#e860a0",
+  Utilities: "#f0a830",
+  "Office Supplies": "#20b8d0",
+  "Marketing / Ads": "#b060f0",
+  "Repairs / Maintenance": "#708090",
+  "Owner Drawings": "#d4a030",
+  Insurance: "#30a0e0",
+  "Taxes / Fees": "#f0555a",
+  "Loan / Interest": "#d03040",
+  Miscellaneous: "#8a8070",
+  "Rent / Lease": "#7c6cf0",
 };
 
 const API_BASE = "/api";
@@ -140,6 +150,9 @@ export default function Dashboard({ phone, onBack }) {
             </div>
           ))}
         </div>
+
+        {/* Chat bar */}
+        <ChatBar phone={phone} />
 
         {/* Navigation */}
         <div className="flex gap-1 mb-5 bg-surface border border-border rounded-lg p-1 w-fit">

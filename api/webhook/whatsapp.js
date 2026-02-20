@@ -1,190 +1,84 @@
 // api/webhook/whatsapp.js - Vercel serverless WhatsApp webhook
 
-import { createClient } from "@supabase/supabase-js";
-import twilio from "twilio";
+import { callGeminiJSON, fetchTwilioImage } from "../lib/gemini.js";
+import { getOrCreateUser, storeTransactions, getSupabase } from "../lib/storage.js";
+import { sendWhatsAppMessage, formatReply } from "../lib/whatsapp-helpers.js";
+import { EXTRACTION_PROMPT } from "../lib/prompts/extraction.js";
+import { handleQuery } from "../lib/query-engine.js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SECRET_KEY
-);
+const COMMANDS = ["hi", "hello", "help", "start", "summary", "report", "dashboard"];
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
-const CATEGORIES = [
-  "Revenue / Sales", "Rent / Lease", "Salaries / Wages", "Utilities",
-  "Office Supplies", "Transport / Fuel", "Food / Meals", "Inventory / Stock",
-  "Marketing / Ads", "Repairs / Maintenance", "Insurance", "Taxes / Fees",
-  "Loan / Interest", "Miscellaneous",
-];
-
-const EXTRACTION_PROMPT = `You are a bookkeeping assistant that extracts transactions from photos of handwritten or printed ledger pages.
-
-Return ONLY valid JSON (no markdown, no backticks) in this format:
-{
-  "transactions": [
-    { "date": "YYYY-MM-DD", "description": "what it's for", "amount": 1234.56, "type": "debit or credit", "category": "category" }
-  ],
-  "currency_detected": "LKR/USD/EUR/unknown",
-  "page_notes": "context from the page",
-  "confidence": "high/medium/low"
+function isCommand(body) {
+  return COMMANDS.includes(body);
 }
-Categories: ${CATEGORIES.join(", ")}
-Rules:
-- Best-guess unclear numbers, mark with [unclear] in description
-- Use most recent visible date if a row has none
-- Extract ALL rows including partial ones
-- If not a financial document, return {"error": "not a financial document"}`;
 
-// ── Helpers ──────────────────────────────────────────────────────
+async function handleCommand(body, user, phone) {
+  if (["hi", "hello", "help", "start"].includes(body)) {
+    return (
+      `📒 *Ledger Digitizer*\n\n` +
+      `Send me a photo of your ledger page and I'll:\n` +
+      `✅ Extract all transactions\n` +
+      `✅ Categorize each expense\n` +
+      `✅ Give you a summary\n\n` +
+      `*Commands:*\n` +
+      `📊 "summary" — this month's overview\n` +
+      `📋 "report" — full dashboard link\n` +
+      `❓ "help" — show this message\n\n` +
+      `You can also ask me questions like:\n` +
+      `_"How much did I spend on meals?"_\n` +
+      `_"What were my top expenses this month?"_\n\n` +
+      `_Just snap a photo of your book and send it!_`
+    );
+  }
 
-function parseDate(dateStr) {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+  if (body === "summary") {
+    const supabase = getSupabase();
+    const { data: txns } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+
+    if (!txns?.length) {
+      return "No transactions this month yet. Send a ledger photo to get started!";
+    }
+
+    const exp = txns.filter((t) => t.type === "debit").reduce((s, t) => s + Number(t.amount), 0);
+    const inc = txns.filter((t) => t.type === "credit").reduce((s, t) => s + Number(t.amount), 0);
+    return (
+      `📊 *This month's summary*\n\n` +
+      `${txns.length} transactions\n` +
+      `💸 Expenses: ${exp.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
+      `💰 Income: ${inc.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
+      `${inc - exp >= 0 ? "📈" : "📉"} Net: ${(inc - exp).toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\n` +
+      `Full details: ${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`
+    );
+  }
+
+  if (body === "report" || body === "dashboard") {
+    return `📋 View your full dashboard:\n${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
+  }
+
   return null;
 }
 
-async function getOrCreateUser(phone) {
-  const { data: existing } = await supabase.from("users").select("*").eq("phone", phone).single();
-  if (existing) {
-    await supabase.from("users").update({ last_active: new Date().toISOString() }).eq("id", existing.id);
-    return existing;
-  }
-  const { data: newUser } = await supabase.from("users").insert({ phone }).select().single();
-  return newUser;
-}
+async function handleImage(mediaUrl, user, phone) {
+  const { base64, contentType } = await fetchTwilioImage(mediaUrl);
+  console.log("[extract] Image fetched:", Math.round(base64.length / 1024), "KB");
 
-async function extractWithGemini(mediaUrl) {
-  console.log("[1] Fetching image from Twilio:", mediaUrl?.substring(0, 80));
-  const imageResponse = await fetch(mediaUrl, {
-    headers: {
-      Authorization: "Basic " + Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString("base64"),
-    },
+  const parsed = await callGeminiJSON(EXTRACTION_PROMPT, {
+    imageBase64: base64,
+    imageMimeType: contentType,
   });
 
-  if (!imageResponse.ok) {
-    throw new Error(`Image fetch failed: ${imageResponse.status} ${imageResponse.statusText}`);
+  if (parsed.error) {
+    return `⚠️ ${parsed.error}\n\nPlease send a clear photo of a ledger page, receipt book, or expense register.`;
   }
 
-  const imageBuffer = await imageResponse.arrayBuffer();
-  const base64 = Buffer.from(imageBuffer).toString("base64");
-  const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
-  console.log("[2] Image fetched OK -", Math.round(base64.length / 1024), "KB, type:", contentType);
+  await storeTransactions(user.id, parsed);
 
-  console.log("[3] Calling Gemini API...");
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: EXTRACTION_PROMPT + "\n\nExtract all transactions. Return only JSON." },
-            { inline_data: { mime_type: contentType, data: base64 } },
-          ],
-        }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 4000 },
-      }),
-    }
-  );
-
-  console.log("[4] Gemini response status:", resp.status);
-  const data = await resp.json();
-
-  if (data.error) {
-    console.error("[4] Gemini API error:", JSON.stringify(data.error));
-    throw new Error(`Gemini: ${data.error.message}`);
-  }
-
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-  console.log("[5] Gemini text length:", text.length, "- first 200 chars:", text.substring(0, 200));
-
-  if (!text) {
-    console.error("[5] Empty response. Full data:", JSON.stringify(data).substring(0, 500));
-    throw new Error("Gemini returned empty response");
-  }
-
-  const cleaned = text.replace(/```json|```/g, "").trim();
-  const parsed = JSON.parse(cleaned);
-  console.log("[6] Parsed OK -", parsed.transactions?.length || 0, "transactions");
-  return parsed;
-}
-
-async function storeTransactions(userId, parsed) {
-  const { data: page } = await supabase
-    .from("pages")
-    .insert({
-      user_id: userId,
-      page_notes: parsed.page_notes,
-      currency_detected: parsed.currency_detected,
-      confidence: parsed.confidence,
-      transaction_count: parsed.transactions?.length || 0,
-    })
-    .select()
-    .single();
-
-  if (!parsed.transactions?.length) return { page, transactions: [] };
-
-  const rows = parsed.transactions.map((t) => ({
-    user_id: userId,
-    page_id: page.id,
-    date: t.date,
-    parsed_date: parseDate(t.date),
-    description: t.description,
-    amount: t.amount,
-    type: t.type,
-    category: t.category,
-    is_unclear: t.description?.includes("[unclear]") || false,
-  }));
-
-  const { data: txns } = await supabase
-    .from("transactions")
-    .insert(rows)
-    .select();
-
-  return { page, transactions: txns };
-}
-
-function formatReply(parsed, dashboardUrl) {
-  const txns = parsed.transactions || [];
-  if (!txns.length) return "I couldn't find any transactions in that image. Please send a clearer photo of your ledger page.";
-
-  const debits = txns.filter((t) => t.type === "debit");
-  const credits = txns.filter((t) => t.type === "credit");
-  const totalExp = debits.reduce((s, t) => s + t.amount, 0);
-  const totalInc = credits.reduce((s, t) => s + t.amount, 0);
-  const currency = parsed.currency_detected || "";
-
-  let msg = `✅ *${txns.length} transactions extracted*\n`;
-  msg += `📊 Confidence: ${parsed.confidence}\n\n`;
-
-  if (totalExp > 0) msg += `💸 Expenses: ${currency} ${totalExp.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
-  if (totalInc > 0) msg += `💰 Income: ${currency} ${totalInc.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
-
-  const net = totalInc - totalExp;
-  msg += `${net >= 0 ? "📈" : "📉"} Net: ${currency} ${net.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\n`;
-
-  // Top categories
-  const catTotals = {};
-  debits.forEach((t) => { catTotals[t.category] = (catTotals[t.category] || 0) + t.amount; });
-  const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 4);
-
-  if (topCats.length) {
-    msg += `*Top expenses:*\n`;
-    topCats.forEach(([cat, amt]) => {
-      msg += `  • ${cat}: ${currency} ${amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
-    });
-    msg += "\n";
-  }
-
-  msg += `📋 View full details & charts:\n${dashboardUrl}\n\n`;
-  msg += `_Send another photo to add more pages._`;
-
-  return msg;
+  const dashboardUrl = `${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
+  return formatReply(parsed, dashboardUrl);
 }
 
 // ── Main Handler ─────────────────────────────────────────────────
@@ -199,89 +93,26 @@ export default async function handler(req, res) {
     const phone = from.replace("whatsapp:", "");
 
     const user = await getOrCreateUser(phone);
+    let reply;
 
-    // ── Text commands ──
-    if (numMedia === 0) {
-      let reply = "📒 Send me a ledger photo!";
+    if (numMedia > 0) {
+      // Image → extraction pipeline
+      await sendWhatsAppMessage(from, "📷 Got it! Extracting transactions... ⏳");
+      reply = await handleImage(req.body.MediaUrl0, user, phone);
 
-      if (["hi", "hello", "help", "start"].includes(body)) {
-        reply =
-          `📒 *Ledger Digitizer*\n\n` +
-          `Send me a photo of your ledger page and I'll:\n` +
-          `✅ Extract all transactions\n` +
-          `✅ Categorize each expense\n` +
-          `✅ Give you a summary\n\n` +
-          `*Commands:*\n` +
-          `📊 "summary" — this month's overview\n` +
-          `📋 "report" — full dashboard link\n` +
-          `❓ "help" — show this message\n\n` +
-          `_Just snap a photo of your book and send it!_`;
-      } else if (body === "summary") {
-        const { data: txns } = await supabase
-          .from("transactions")
-          .select("*")
-          .eq("user_id", user.id)
-          .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+    } else if (isCommand(body)) {
+      // Known command
+      reply = await handleCommand(body, user, phone);
 
-        if (!txns?.length) {
-          reply = "No transactions this month yet. Send a ledger photo to get started!";
-        } else {
-          const exp = txns.filter((t) => t.type === "debit").reduce((s, t) => s + Number(t.amount), 0);
-          const inc = txns.filter((t) => t.type === "credit").reduce((s, t) => s + Number(t.amount), 0);
-          reply =
-            `📊 *This month's summary*\n\n` +
-            `${txns.length} transactions\n` +
-            `💸 Expenses: ${exp.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
-            `💰 Income: ${inc.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
-            `${inc - exp >= 0 ? "📈" : "📉"} Net: ${(inc - exp).toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\n` +
-            `Full details: ${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
-        }
-      } else if (body === "report" || body === "dashboard") {
-        reply = `📋 View your full dashboard:\n${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
-      } else {
-        reply = `I work best with photos! 📷\n\nSend me a photo of your ledger page, or type "help" for commands.`;
-      }
-
-      await twilioClient.messages.create({ from: process.env.TWILIO_WHATSAPP_NUMBER, to: from, body: reply });
-      res.setHeader("Content-Type", "text/xml");
-      return res.status(200).send("<Response></Response>");
+    } else {
+      // Natural language query
+      await sendWhatsAppMessage(from, "🔍 Looking that up...");
+      const result = await handleQuery(body, user.id);
+      reply = result.answer;
     }
 
-    // ── Image processing ──
-    // Send "processing" message first
-    await twilioClient.messages.create({
-      from: process.env.TWILIO_WHATSAPP_NUMBER,
-      to: from,
-      body: "📷 Got it! Extracting transactions... ⏳"
-    });
+    await sendWhatsAppMessage(from, reply);
 
-    // Extract with Gemini
-    const parsed = await extractWithGemini(req.body.MediaUrl0);
-
-    if (parsed.error) {
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from,
-        body: `⚠️ ${parsed.error}\n\nPlease send a clear photo of a ledger page, receipt book, or expense register.`,
-      });
-      res.setHeader("Content-Type", "text/xml");
-      return res.status(200).send("<Response></Response>");
-    }
-
-    // Store in Supabase
-    await storeTransactions(user.id, parsed);
-
-    // Send summary reply
-    const dashboardUrl = `${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
-    const reply = formatReply(parsed, dashboardUrl);
-
-    await twilioClient.messages.create({
-      from: process.env.TWILIO_WHATSAPP_NUMBER,
-      to: from,
-      body: reply,
-    });
-
-    // Send HTTP response AFTER all processing is complete
     res.setHeader("Content-Type", "text/xml");
     return res.status(200).send("<Response></Response>");
 
@@ -290,11 +121,7 @@ export default async function handler(req, res) {
     console.error("Stack:", err.stack);
 
     try {
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: req.body.From,
-        body: `❌ Error: ${err.message?.substring(0, 200)}`,
-      });
+      await sendWhatsAppMessage(req.body.From, `❌ Error: ${err.message?.substring(0, 200)}`);
     } catch (e) {
       console.error("Failed to send error message:", e.message);
     }
