@@ -9,13 +9,13 @@
     "api/webhook/*.js": {
       "maxDuration": 60
     },
-    "api/query/*.js": {
+    "api/query.js": {
       "maxDuration": 30
     },
-    "api/summary/*.js": {
+    "api/summary.js": {
       "maxDuration": 15
     },
-    "api/transactions/*.js": {
+    "api/transactions.js": {
       "maxDuration": 15
     }
   }

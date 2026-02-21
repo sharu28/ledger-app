@@ -18,7 +18,7 @@ export default function ChatBar({ phone }) {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/query/${encodeURIComponent(phone)}`, {
+      const res = await fetch(`${API_BASE}/query?phone=${encodeURIComponent(phone)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),

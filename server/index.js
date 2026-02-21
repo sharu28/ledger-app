@@ -122,10 +122,12 @@ app.get("/api/user/:phone", async (req, res) => {
   res.json(user);
 });
 
-app.get("/api/transactions/:phone", async (req, res) => {
+app.get("/api/transactions", async (req, res) => {
   const supabase = getSupabase();
+  const phone = req.query.phone || req.params.phone;
+  if (!phone) return res.status(400).json({ error: "Phone parameter required" });
   const { data: user } = await supabase
-    .from("users").select("id").eq("phone", req.params.phone).single();
+    .from("users").select("id").eq("phone", phone).single();
   if (!user) return res.status(404).json({ error: "User not found" });
 
   const { month, category } = req.query;
@@ -146,10 +148,12 @@ app.get("/api/transactions/:phone", async (req, res) => {
   res.json(data || []);
 });
 
-app.get("/api/summary/:phone", async (req, res) => {
+app.get("/api/summary", async (req, res) => {
   const supabase = getSupabase();
+  const phone = req.query.phone || req.params.phone;
+  if (!phone) return res.status(400).json({ error: "Phone parameter required" });
   const { data: user } = await supabase
-    .from("users").select("id").eq("phone", req.params.phone).single();
+    .from("users").select("id").eq("phone", phone).single();
   if (!user) return res.status(404).json({ error: "User not found" });
 
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -171,10 +175,12 @@ app.get("/api/summary/:phone", async (req, res) => {
 });
 
 // Query endpoint for dashboard chat bar
-app.post("/api/query/:phone", async (req, res) => {
+app.post("/api/query", async (req, res) => {
   const supabase = getSupabase();
+  const phone = req.query.phone;
+  if (!phone) return res.status(400).json({ error: "Phone parameter required" });
   const { data: user } = await supabase
-    .from("users").select("id").eq("phone", req.params.phone).single();
+    .from("users").select("id").eq("phone", phone).single();
   if (!user) return res.status(404).json({ error: "User not found" });
 
   const { question } = req.body;

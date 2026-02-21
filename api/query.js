@@ -1,7 +1,7 @@
-// api/query/[phone].js - Dashboard chat query endpoint
-
-import { getSupabase } from "../lib/storage.js";
-import { handleQuery } from "../lib/query-engine.js";
+// api/query.js - Dashboard chat query endpoint
+// Usage: POST /api/query?phone=+94742216040  body: { "question": "..." }
+import { getSupabase } from "./lib/storage.js";
+import { handleQuery } from "./lib/query-engine.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -10,6 +10,7 @@ export default async function handler(req, res) {
 
   const supabase = getSupabase();
   const { phone } = req.query;
+  if (!phone) return res.status(400).json({ error: "Phone parameter required" });
 
   const { data: user } = await supabase
     .from("users").select("id").eq("phone", phone).single();

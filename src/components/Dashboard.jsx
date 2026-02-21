@@ -38,8 +38,8 @@ export default function Dashboard({ phone, onBack }) {
       setLoading(true);
       try {
         const [txnRes, sumRes] = await Promise.all([
-          fetch(`${API_BASE}/transactions/${encodeURIComponent(phone)}`),
-          fetch(`${API_BASE}/summary/${encodeURIComponent(phone)}`),
+          fetch(`${API_BASE}/transactions?phone=${encodeURIComponent(phone)}`),
+          fetch(`${API_BASE}/summary?phone=${encodeURIComponent(phone)}`),
         ]);
         const txns = await txnRes.json();
         const sum = await sumRes.json();
