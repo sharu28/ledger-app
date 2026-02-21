@@ -1,6 +1,6 @@
 // api/summary.js - Dashboard summary endpoint
 // Usage: GET /api/summary?phone=+94742216040
-import { getSupabase } from "./lib/storage.js";
+import { getSupabase } from "../lib/storage.js";
 
 export default async function handler(req, res) {
   const supabase = getSupabase();

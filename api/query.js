@@ -1,7 +1,7 @@
 // api/query.js - Dashboard chat query endpoint
 // Usage: POST /api/query?phone=+94742216040  body: { "question": "..." }
-import { getSupabase } from "./lib/storage.js";
-import { handleQuery } from "./lib/query-engine.js";
+import { getSupabase } from "../lib/storage.js";
+import { handleQuery } from "../lib/query-engine.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

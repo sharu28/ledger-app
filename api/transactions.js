@@ -1,6 +1,6 @@
 // api/transactions.js - Dashboard transactions endpoint
 // Usage: GET /api/transactions?phone=+94742216040&month=2026-02&category=Food
-import { getSupabase } from "./lib/storage.js";
+import { getSupabase } from "../lib/storage.js";
 
 export default async function handler(req, res) {
   const supabase = getSupabase();

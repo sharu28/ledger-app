@@ -1,6 +1,6 @@
 // server/index.js
 // Express backend for local development
-// Uses shared modules from api/lib/
+// Uses shared modules from lib/
 
 import express from "express";
 import cors from "cors";
@@ -8,17 +8,17 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-import { callGeminiJSON, fetchTwilioImage } from "../api/lib/gemini.js";
-import { getOrCreateUser, storeTransactions, createPage, getSupabase } from "../api/lib/storage.js";
-import { sendWhatsAppMessage, sendWhatsAppMedia, formatReply } from "../api/lib/whatsapp-helpers.js";
-import { DIGITIZATION_PROMPT } from "../api/lib/prompts/digitization.js";
-import { getCategorizationPrompt } from "../api/lib/prompts/categorization.js";
-import { getAssessmentPrompt } from "../api/lib/prompts/assessment.js";
-import { handleQuery } from "../api/lib/query-engine.js";
-import { uploadToR2 } from "../api/lib/r2.js";
-import { generateDigitizedPDF } from "../api/lib/pdf-generator.js";
-import { createPendingExtraction, getPendingExtraction, resolvePendingExtraction } from "../api/lib/conversation-state.js";
-import { classifyConfirmation } from "../api/lib/intent-classifier.js";
+import { callGeminiJSON, fetchTwilioImage } from "../lib/gemini.js";
+import { getOrCreateUser, storeTransactions, createPage, getSupabase } from "../lib/storage.js";
+import { sendWhatsAppMessage, sendWhatsAppMedia, formatReply } from "../lib/whatsapp-helpers.js";
+import { DIGITIZATION_PROMPT } from "../lib/prompts/digitization.js";
+import { getCategorizationPrompt } from "../lib/prompts/categorization.js";
+import { getAssessmentPrompt } from "../lib/prompts/assessment.js";
+import { handleQuery } from "../lib/query-engine.js";
+import { uploadToR2 } from "../lib/r2.js";
+import { generateDigitizedPDF } from "../lib/pdf-generator.js";
+import { createPendingExtraction, getPendingExtraction, resolvePendingExtraction } from "../lib/conversation-state.js";
+import { classifyConfirmation } from "../lib/intent-classifier.js";
 
 const app = express();
 app.use(cors());

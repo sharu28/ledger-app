@@ -1,17 +1,17 @@
 // api/webhook/whatsapp.js - Vercel serverless WhatsApp webhook
 // Two-step flow: digitize → confirm → categorize
 
-import { callGeminiJSON, fetchTwilioImage } from "../lib/gemini.js";
-import { getOrCreateUser, storeTransactions, createPage, getSupabase } from "../lib/storage.js";
-import { sendWhatsAppMessage, sendWhatsAppMedia, formatReply } from "../lib/whatsapp-helpers.js";
-import { DIGITIZATION_PROMPT } from "../lib/prompts/digitization.js";
-import { getCategorizationPrompt } from "../lib/prompts/categorization.js";
-import { getAssessmentPrompt } from "../lib/prompts/assessment.js";
-import { handleQuery } from "../lib/query-engine.js";
-import { uploadToR2 } from "../lib/r2.js";
-import { generateDigitizedPDF } from "../lib/pdf-generator.js";
-import { createPendingExtraction, getPendingExtraction, resolvePendingExtraction } from "../lib/conversation-state.js";
-import { classifyConfirmation } from "../lib/intent-classifier.js";
+import { callGeminiJSON, fetchTwilioImage } from "../../lib/gemini.js";
+import { getOrCreateUser, storeTransactions, createPage, getSupabase } from "../../lib/storage.js";
+import { sendWhatsAppMessage, sendWhatsAppMedia, formatReply } from "../../lib/whatsapp-helpers.js";
+import { DIGITIZATION_PROMPT } from "../../lib/prompts/digitization.js";
+import { getCategorizationPrompt } from "../../lib/prompts/categorization.js";
+import { getAssessmentPrompt } from "../../lib/prompts/assessment.js";
+import { handleQuery } from "../../lib/query-engine.js";
+import { uploadToR2 } from "../../lib/r2.js";
+import { generateDigitizedPDF } from "../../lib/pdf-generator.js";
+import { createPendingExtraction, getPendingExtraction, resolvePendingExtraction } from "../../lib/conversation-state.js";
+import { classifyConfirmation } from "../../lib/intent-classifier.js";
 
 const COMMANDS = ["hi", "hello", "help", "start", "summary", "report", "dashboard"];
 
