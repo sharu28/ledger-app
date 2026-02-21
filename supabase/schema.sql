@@ -105,6 +105,32 @@ END;
 $$;
 
 -- ============================================================
+-- Pending extractions (two-step workflow state)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS pending_extractions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  page_id UUID REFERENCES pages(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'awaiting_confirmation'
+    CHECK (status IN ('awaiting_confirmation', 'confirmed', 'declined', 'expired')),
+  raw_extraction JSONB NOT NULL,          -- digitized rows before categorization
+  content_type TEXT,                       -- 'expenses', 'inventory', 'sales', 'mixed', 'unknown'
+  follow_up_question TEXT,                -- the AI-generated question sent to user
+  image_url TEXT,                          -- R2 URL of the original image
+  pdf_url TEXT,                            -- R2 URL of the generated PDF
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_user ON pending_extractions(user_id, status);
+
+ALTER TABLE pending_extractions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Service role full access" ON pending_extractions FOR ALL USING (true) WITH CHECK (true);
+
+-- Add pdf_url column to pages table (if not present)
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS pdf_url TEXT;
+
+-- ============================================================
 -- Categories reference (for documentation)
 -- Revenue / Sales, Inventory / Stock, Salaries / Wages,
 -- Shop Expenses, Transport / Fuel, Food / Meals, Utilities,

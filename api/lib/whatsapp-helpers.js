@@ -19,6 +19,15 @@ export async function sendWhatsAppMessage(to, body) {
   });
 }
 
+export async function sendWhatsAppMedia(to, body, mediaUrl) {
+  return getTwilioClient().messages.create({
+    from: process.env.TWILIO_WHATSAPP_NUMBER,
+    to,
+    body,
+    mediaUrl: [mediaUrl],
+  });
+}
+
 export function formatReply(parsed, dashboardUrl) {
   const txns = parsed.transactions || [];
   if (!txns.length) {
@@ -52,7 +61,7 @@ export function formatReply(parsed, dashboardUrl) {
     msg += "\n";
   }
 
-  msg += `📋 View full details & charts:\n${dashboardUrl}\n\n`;
+  msg += `📋 View full details & charts: ${dashboardUrl}\n\n`;
   msg += `_Send another photo or ask me a question about your expenses._`;
 
   return msg;

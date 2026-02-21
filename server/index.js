@@ -9,10 +9,16 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { callGeminiJSON, fetchTwilioImage } from "../api/lib/gemini.js";
-import { getOrCreateUser, storeTransactions, getSupabase } from "../api/lib/storage.js";
-import { sendWhatsAppMessage, formatReply } from "../api/lib/whatsapp-helpers.js";
-import { EXTRACTION_PROMPT } from "../api/lib/prompts/extraction.js";
+import { getOrCreateUser, storeTransactions, createPage, getSupabase } from "../api/lib/storage.js";
+import { sendWhatsAppMessage, sendWhatsAppMedia, formatReply } from "../api/lib/whatsapp-helpers.js";
+import { DIGITIZATION_PROMPT } from "../api/lib/prompts/digitization.js";
+import { getCategorizationPrompt } from "../api/lib/prompts/categorization.js";
+import { getAssessmentPrompt } from "../api/lib/prompts/assessment.js";
 import { handleQuery } from "../api/lib/query-engine.js";
+import { uploadToR2 } from "../api/lib/r2.js";
+import { generateDigitizedPDF } from "../api/lib/pdf-generator.js";
+import { createPendingExtraction, getPendingExtraction, resolvePendingExtraction } from "../api/lib/conversation-state.js";
+import { classifyConfirmation } from "../api/lib/intent-classifier.js";
 
 const app = express();
 app.use(cors());
@@ -20,6 +26,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const COMMANDS = ["hi", "hello", "help", "start", "summary", "report", "dashboard"];
+
+function isCommand(body) {
+  return COMMANDS.includes(body);
+}
 
 // ── WhatsApp Webhook ─────────────────────────────────────────────
 
@@ -34,70 +44,53 @@ app.post("/webhook/whatsapp", async (req, res) => {
     let reply;
 
     if (numMedia > 0) {
-      // Image → extraction pipeline
-      await sendWhatsAppMessage(from, "📷 Got your ledger photo! Extracting transactions... ⏳");
+      // ── Image received → digitize + PDF ──
+      await sendWhatsAppMessage(from, "📷 Got it! Digitizing your page... ⏳");
 
-      const { base64, contentType } = await fetchTwilioImage(req.body.MediaUrl0);
-      const parsed = await callGeminiJSON(EXTRACTION_PROMPT, {
-        imageBase64: base64,
-        imageMimeType: contentType,
-      });
-
-      if (parsed.error) {
-        reply = `⚠️ ${parsed.error}\n\nPlease send a clear photo of a ledger page, receipt book, or expense register.`;
-      } else {
-        await storeTransactions(user.id, parsed);
-        const dashboardUrl = `${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
-        reply = formatReply(parsed, dashboardUrl);
+      // Expire any existing pending extraction
+      const existingPending = await getPendingExtraction(user.id);
+      if (existingPending) {
+        await resolvePendingExtraction(existingPending.id, "expired");
       }
 
-    } else if (COMMANDS.includes(body)) {
-      // Known commands
-      if (["hi", "hello", "help", "start"].includes(body)) {
-        reply =
-          `📒 *Ledger Digitizer*\n\n` +
-          `Send me a photo of your ledger page and I'll:\n` +
-          `✅ Extract all transactions\n` +
-          `✅ Categorize each expense\n` +
-          `✅ Give you a summary\n\n` +
-          `*Commands:*\n` +
-          `📊 "summary" — this month's overview\n` +
-          `📋 "report" — full dashboard link\n` +
-          `❓ "help" — show this message\n\n` +
-          `You can also ask me questions like:\n` +
-          `_"How much did I spend on meals?"_\n` +
-          `_"What were my top expenses this month?"_\n\n` +
-          `_Just snap a photo of your book and send it!_`;
-      } else if (body === "summary") {
-        const supabase = getSupabase();
-        const { data: txns } = await supabase
-          .from("transactions")
-          .select("*")
-          .eq("user_id", user.id)
-          .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+      const result = await handleImage(req.body.MediaUrl0, user, phone);
 
-        if (!txns?.length) {
-          reply = "No transactions this month yet. Send a ledger photo to get started!";
-        } else {
-          const exp = txns.filter((t) => t.type === "debit").reduce((s, t) => s + Number(t.amount), 0);
-          const inc = txns.filter((t) => t.type === "credit").reduce((s, t) => s + Number(t.amount), 0);
-          reply =
-            `📊 *This month's summary*\n\n` +
-            `${txns.length} transactions\n` +
-            `💸 Expenses: ${exp.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
-            `💰 Income: ${inc.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
-            `${inc - exp >= 0 ? "📈" : "📉"} Net: ${(inc - exp).toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\n` +
-            `Full details: ${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
-        }
-      } else if (body === "report" || body === "dashboard") {
-        reply = `📋 View your full dashboard:\n${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
+      if (result.error) {
+        reply = result.error;
+      } else if (result.pdfUrl) {
+        await sendWhatsAppMedia(from, result.followUpMessage, result.pdfUrl);
+        return res.status(200).send("<Response></Response>");
+      } else {
+        reply = result.followUpMessage;
       }
 
     } else {
-      // Natural language query
-      await sendWhatsAppMessage(from, "🔍 Looking that up...");
-      const result = await handleQuery(body, user.id);
-      reply = result.answer;
+      // ── Text message → check for pending extraction first ──
+      const pending = await getPendingExtraction(user.id);
+
+      if (pending && !isCommand(body)) {
+        const intent = classifyConfirmation(body);
+
+        if (intent === "yes") {
+          await sendWhatsAppMessage(from, "✅ Great! Categorizing your entries... ⏳");
+          reply = await handleConfirmation(pending, user, phone);
+
+        } else if (intent === "no") {
+          await resolvePendingExtraction(pending.id, "declined");
+          reply = "👍 No problem! Your digitized page is saved. Send another photo anytime or ask me a question about your expenses.";
+
+        } else {
+          reply = `I'm not sure what you mean. Reply *yes* to categorize the ${pending.raw_extraction?.rows?.length || ""} entries I digitized, or *no* to skip.`;
+        }
+
+      } else if (isCommand(body)) {
+        reply = await handleCommand(body, user, phone);
+
+      } else {
+        await sendWhatsAppMessage(from, "🔍 Looking that up...");
+        const result = await handleQuery(body, user.id);
+        reply = result.answer;
+      }
     }
 
     await sendWhatsAppMessage(from, reply);
@@ -112,6 +105,151 @@ app.post("/webhook/whatsapp", async (req, res) => {
   }
 });
 
+// ── Image handling (Step 1) ─────────────────────────────────────
+
+async function handleImage(mediaUrl, user, phone) {
+  const { base64, contentType } = await fetchTwilioImage(mediaUrl);
+  console.log("[digitize] Image fetched:", Math.round(base64.length / 1024), "KB");
+
+  const digitized = await callGeminiJSON(DIGITIZATION_PROMPT, {
+    imageBase64: base64,
+    imageMimeType: contentType,
+  });
+
+  if (digitized.error) {
+    return { error: `⚠️ ${digitized.error}` };
+  }
+
+  const rowCount = digitized.rows?.length || 0;
+  if (!rowCount) {
+    return { error: "I couldn't find any entries in that image. Please send a clearer photo." };
+  }
+
+  const page = await createPage(user.id, {
+    pageNotes: digitized.page_notes,
+    currency: digitized.currency_detected,
+    confidence: digitized.confidence,
+    transactionCount: rowCount,
+  });
+
+  // Upload image to R2
+  const imageBuffer = Buffer.from(base64, "base64");
+  const ext = contentType === "image/png" ? "png" : "jpg";
+  const imageKey = `${user.id}/images/${page.id}.${ext}`;
+  let imageUrl;
+  try {
+    imageUrl = await uploadToR2(imageKey, imageBuffer, contentType);
+    await getSupabase().from("pages").update({ image_url: imageUrl }).eq("id", page.id);
+  } catch (err) {
+    console.warn("[r2] Image upload failed (continuing):", err.message);
+  }
+
+  // Generate and upload PDF
+  const pdfBuffer = await generateDigitizedPDF(digitized);
+  const pdfKey = `${user.id}/pdfs/${page.id}.pdf`;
+  let pdfUrl;
+  try {
+    pdfUrl = await uploadToR2(pdfKey, pdfBuffer, "application/pdf");
+    await getSupabase().from("pages").update({ pdf_url: pdfUrl }).eq("id", page.id);
+  } catch (err) {
+    console.warn("[r2] PDF upload failed (continuing):", err.message);
+  }
+
+  // Get AI assessment
+  let followUpMessage;
+  try {
+    const assessment = await callGeminiJSON(getAssessmentPrompt(digitized));
+    followUpMessage = assessment.follow_up_message;
+  } catch (err) {
+    console.warn("[assess] Assessment failed, using default:", err.message);
+  }
+
+  if (!followUpMessage) {
+    followUpMessage = `I've digitized *${rowCount} entries* from your page. Want me to categorize them and add to your ledger? Reply *yes* or *no*.`;
+  }
+
+  await createPendingExtraction(user.id, page.id, digitized, {
+    contentType: digitized.content_assessment,
+    followUpQuestion: followUpMessage,
+    imageUrl,
+    pdfUrl,
+  });
+
+  return { pdfUrl, followUpMessage };
+}
+
+// ── Confirmation handling (Step 2) ──────────────────────────────
+
+async function handleConfirmation(pending, user, phone) {
+  const raw = pending.raw_extraction;
+
+  const categorized = await callGeminiJSON(
+    getCategorizationPrompt(raw.rows, raw.currency_detected, raw.page_notes)
+  );
+
+  if (!categorized.transactions?.length) {
+    return "Something went wrong during categorization. Please try sending the photo again.";
+  }
+
+  await storeTransactions(user.id, categorized, { pageId: pending.page_id });
+  await resolvePendingExtraction(pending.id, "confirmed");
+
+  const dashboardUrl = `${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
+  return formatReply(categorized, dashboardUrl);
+}
+
+// ── Command handling ────────────────────────────────────────────
+
+async function handleCommand(body, user, phone) {
+  if (["hi", "hello", "help", "start"].includes(body)) {
+    return (
+      `📒 *Ledger Digitizer*\n\n` +
+      `Send me a photo of your ledger page and I'll:\n` +
+      `✅ Digitize it into a clean table\n` +
+      `✅ Send you a PDF of the entries\n` +
+      `✅ Categorize & summarize on your request\n\n` +
+      `*Commands:*\n` +
+      `📊 "summary" — this month's overview\n` +
+      `📋 "report" — full dashboard link\n` +
+      `❓ "help" — show this message\n\n` +
+      `You can also ask me questions like:\n` +
+      `_"How much did I spend on meals?"_\n` +
+      `_"What were my top expenses this month?"_\n\n` +
+      `_Just snap a photo of your book and send it!_`
+    );
+  }
+
+  if (body === "summary") {
+    const supabase = getSupabase();
+    const { data: txns } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+
+    if (!txns?.length) {
+      return "No transactions this month yet. Send a ledger photo to get started!";
+    }
+
+    const exp = txns.filter((t) => t.type === "debit").reduce((s, t) => s + Number(t.amount), 0);
+    const inc = txns.filter((t) => t.type === "credit").reduce((s, t) => s + Number(t.amount), 0);
+    return (
+      `📊 *This month's summary*\n\n` +
+      `${txns.length} transactions\n` +
+      `💸 Expenses: ${exp.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
+      `💰 Income: ${inc.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n` +
+      `${inc - exp >= 0 ? "📈" : "📉"} Net: ${(inc - exp).toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\n` +
+      `Full details: ${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`
+    );
+  }
+
+  if (body === "report" || body === "dashboard") {
+    return `📋 View your full dashboard: ${process.env.APP_URL}/dashboard?phone=${encodeURIComponent(phone)}`;
+  }
+
+  return null;
+}
+
 // ── API Routes (for web dashboard) ───────────────────────────────
 
 app.get("/api/user/:phone", async (req, res) => {
@@ -124,7 +262,7 @@ app.get("/api/user/:phone", async (req, res) => {
 
 app.get("/api/transactions", async (req, res) => {
   const supabase = getSupabase();
-  const phone = req.query.phone || req.params.phone;
+  const phone = req.query.phone;
   if (!phone) return res.status(400).json({ error: "Phone parameter required" });
   const { data: user } = await supabase
     .from("users").select("id").eq("phone", phone).single();
@@ -150,7 +288,7 @@ app.get("/api/transactions", async (req, res) => {
 
 app.get("/api/summary", async (req, res) => {
   const supabase = getSupabase();
-  const phone = req.query.phone || req.params.phone;
+  const phone = req.query.phone;
   if (!phone) return res.status(400).json({ error: "Phone parameter required" });
   const { data: user } = await supabase
     .from("users").select("id").eq("phone", phone).single();
@@ -174,7 +312,6 @@ app.get("/api/summary", async (req, res) => {
   });
 });
 
-// Query endpoint for dashboard chat bar
 app.post("/api/query", async (req, res) => {
   const supabase = getSupabase();
   const phone = req.query.phone;
@@ -206,5 +343,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Ledger Digitizer server running on port ${PORT}`);
   console.log(`📱 WhatsApp webhook: POST /webhook/whatsapp`);
   console.log(`📊 Dashboard API: /api/*`);
-  console.log(`💬 Query API: POST /api/query/:phone`);
+  console.log(`💬 Query API: POST /api/query?phone=...`);
 });

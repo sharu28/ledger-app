@@ -35,20 +35,50 @@ export async function getOrCreateUser(phone) {
   return newUser;
 }
 
-export async function storeTransactions(userId, parsed) {
+export async function createPage(userId, opts = {}) {
   const supabase = getSupabase();
-
   const { data: page } = await supabase
     .from("pages")
     .insert({
       user_id: userId,
-      page_notes: parsed.page_notes,
-      currency_detected: parsed.currency_detected,
-      confidence: parsed.confidence,
-      transaction_count: parsed.transactions?.length || 0,
+      page_notes: opts.pageNotes || null,
+      currency_detected: opts.currency || null,
+      confidence: opts.confidence || null,
+      transaction_count: opts.transactionCount || 0,
+      image_url: opts.imageUrl || null,
+      pdf_url: opts.pdfUrl || null,
     })
     .select()
     .single();
+  return page;
+}
+
+export async function storeTransactions(userId, parsed, opts = {}) {
+  const supabase = getSupabase();
+
+  let page;
+  if (opts.pageId) {
+    // Use existing page, update transaction count
+    page = { id: opts.pageId };
+    await supabase
+      .from("pages")
+      .update({ transaction_count: parsed.transactions?.length || 0 })
+      .eq("id", opts.pageId);
+  } else {
+    // Create new page (legacy path)
+    const { data } = await supabase
+      .from("pages")
+      .insert({
+        user_id: userId,
+        page_notes: parsed.page_notes,
+        currency_detected: parsed.currency_detected,
+        confidence: parsed.confidence,
+        transaction_count: parsed.transactions?.length || 0,
+      })
+      .select()
+      .single();
+    page = data;
+  }
 
   if (!parsed.transactions?.length) return { page, transactions: [] };
 
