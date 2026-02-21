@@ -12,6 +12,12 @@
     },
     "api/query/*.js": {
       "maxDuration": 30
+    },
+    "api/summary/*.js": {
+      "maxDuration": 15
+    },
+    "api/transactions/*.js": {
+      "maxDuration": 15
     }
   }
 }
