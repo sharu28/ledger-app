@@ -107,19 +107,30 @@ async function handleImage(mediaUrl, user, phone) {
   try {
     imageUrl = await uploadToR2(imageKey, imageBuffer, contentType);
     await getSupabase().from("pages").update({ image_url: imageUrl }).eq("id", page.id);
+    console.log("[r2] Image uploaded:", imageUrl);
   } catch (err) {
-    console.warn("[r2] Image upload failed (continuing):", err.message);
+    console.error("[r2] Image upload failed:", err.message, err.stack);
   }
 
   // 5. Generate PDF
-  const pdfBuffer = await generateDigitizedPDF(digitized);
+  let pdfBuffer;
+  try {
+    pdfBuffer = await generateDigitizedPDF(digitized);
+    console.log("[pdf] Generated PDF:", pdfBuffer.length, "bytes");
+  } catch (err) {
+    console.error("[pdf] PDF generation failed:", err.message, err.stack);
+  }
+
   const pdfKey = `${user.id}/pdfs/${page.id}.pdf`;
   let pdfUrl;
-  try {
-    pdfUrl = await uploadToR2(pdfKey, pdfBuffer, "application/pdf");
-    await getSupabase().from("pages").update({ pdf_url: pdfUrl }).eq("id", page.id);
-  } catch (err) {
-    console.warn("[r2] PDF upload failed (continuing):", err.message);
+  if (pdfBuffer) {
+    try {
+      pdfUrl = await uploadToR2(pdfKey, pdfBuffer, "application/pdf");
+      await getSupabase().from("pages").update({ pdf_url: pdfUrl }).eq("id", page.id);
+      console.log("[r2] PDF uploaded:", pdfUrl);
+    } catch (err) {
+      console.error("[r2] PDF upload failed:", err.message, err.stack);
+    }
   }
 
   // 6. Get AI assessment and follow-up question
