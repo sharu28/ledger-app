@@ -82,7 +82,7 @@ export default function Landing({ onViewDashboard }) {
 
       {/* Footer */}
       <div className="text-center py-6 text-text-dim text-xs border-t border-border">
-        Powered by Gemini Flash AI · Costs less than $0.001 per page
+        Powered by Claude AI · Costs less than $0.001 per page
       </div>
     </div>
   );
